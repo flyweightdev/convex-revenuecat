@@ -3,6 +3,14 @@
   "description": "A RevenueCat entitlement sync component for Convex.",
   "version": "0.1.0",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/flyweightdev/convex-revenuecat.git"
+  },
+  "homepage": "https://github.com/flyweightdev/convex-revenuecat#readme",
+  "bugs": {
+    "url": "https://github.com/flyweightdev/convex-revenuecat/issues"
+  },
   "keywords": [
     "convex",
     "component",
