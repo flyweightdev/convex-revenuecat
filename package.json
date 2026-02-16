@@ -1,7 +1,7 @@
 {
   "name": "@flyweightdev/convex-revenuecat",
   "description": "A RevenueCat entitlement sync component for Convex.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -31,7 +31,7 @@
     "build:codegen": "npx convex codegen --component-dir ./src/component && npm run build",
     "build:clean": "rm -rf dist *.tsbuildinfo && npm run build:codegen",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm whoami || npm login",
+    "prepublishOnly": "npm run build && (npm whoami || npm login)",
     "alpha": "npm version prerelease --preid alpha && npm publish --tag alpha && git push --follow-tags",
     "release": "npm version patch && npm publish && git push --follow-tags"
   },
