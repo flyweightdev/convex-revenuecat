@@ -102,8 +102,6 @@ export function ProfilePage() {
                 <TableRow className="border-border/50 hover:bg-transparent">
                   <TableHead className="text-muted-foreground/80">Entitlement</TableHead>
                   <TableHead className="text-muted-foreground/80">Status</TableHead>
-                  <TableHead className="text-muted-foreground/80">Product</TableHead>
-                  <TableHead className="text-muted-foreground/80">Store</TableHead>
                   <TableHead className="text-muted-foreground/80">Expires</TableHead>
                   <TableHead className="text-muted-foreground/80">Last Synced</TableHead>
                 </TableRow>
@@ -118,22 +116,6 @@ export function ProfilePage() {
                     </TableCell>
                     <TableCell>
                       <StatusBadge status={ent.isActive ? "active" : "cancelled"} />
-                    </TableCell>
-                    <TableCell>
-                      {ent.productIdentifier ? (
-                        <code className="font-mono text-xs text-muted-foreground">
-                          {ent.productIdentifier}
-                        </code>
-                      ) : (
-                        <span className="text-muted-foreground">{"\u2014"}</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {ent.store ? (
-                        <span className="text-sm capitalize">{ent.store}</span>
-                      ) : (
-                        <span className="text-muted-foreground">{"\u2014"}</span>
-                      )}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {ent.expiresDate

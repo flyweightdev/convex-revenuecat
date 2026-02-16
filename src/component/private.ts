@@ -136,13 +136,7 @@ export const unreserveEvent = mutation({
 const entitlementFields = v.object({
   entitlementId: v.string(),
   isActive: v.boolean(),
-  productIdentifier: v.optional(v.string()),
   expiresDate: v.optional(v.string()),
-  gracePeriodExpiresDate: v.optional(v.string()),
-  purchaseDate: v.optional(v.string()),
-  originalPurchaseDate: v.optional(v.string()),
-  store: v.optional(v.string()),
-  isSandbox: v.optional(v.boolean()),
 });
 
 /**
@@ -196,13 +190,7 @@ export const syncSubscriberAndEntitlements = mutation({
         appUserId: args.appUserId,
         entitlementId: ent.entitlementId,
         isActive: ent.isActive,
-        productIdentifier: ent.productIdentifier,
         expiresDate: ent.expiresDate,
-        gracePeriodExpiresDate: ent.gracePeriodExpiresDate,
-        purchaseDate: ent.purchaseDate,
-        originalPurchaseDate: ent.originalPurchaseDate,
-        store: ent.store,
-        isSandbox: ent.isSandbox,
         lastSyncedAt: args.lastSyncedAt,
       });
     }

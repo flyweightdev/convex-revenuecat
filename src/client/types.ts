@@ -101,17 +101,14 @@ export interface RevenueCatWebhookPayload {
 
 /**
  * Parsed entitlement data for storage.
+ *
+ * The `entitlementId` is the entitlement's lookup key (e.g., "premium"),
+ * resolved from the RevenueCat v2 API entitlement definitions.
  */
 export interface EntitlementData {
   entitlementId: string;
   isActive: boolean;
-  productIdentifier?: string;
   expiresDate?: string;
-  gracePeriodExpiresDate?: string;
-  purchaseDate?: string;
-  originalPurchaseDate?: string;
-  store?: string;
-  isSandbox?: boolean;
 }
 
 /**
@@ -166,7 +163,8 @@ export type RegisterRoutesConfig = {
   REVENUECAT_API_KEY?: string;
 
   /**
-   * RevenueCat project ID for REST API v2 calls (virtual currency).
+   * RevenueCat project ID for REST API v2 calls.
+   * Required for all API operations (entitlement sync, virtual currency, etc.).
    * Defaults to process.env.REVENUECAT_PROJECT_ID
    */
   REVENUECAT_PROJECT_ID?: string;

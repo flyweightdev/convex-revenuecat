@@ -16,26 +16,17 @@ const virtualCurrencyBalanceValidator =
 // ============================================================================
 
 /**
- * Compute whether an entitlement is currently active based on expiration dates.
+ * Compute whether an entitlement is currently active based on expiration date.
  * This prevents stale `isActive` values when webhooks are delayed.
  */
 function computeIsActive(ent: {
   isActive: boolean;
   expiresDate?: string;
-  gracePeriodExpiresDate?: string;
 }): boolean {
   // If there's no expiration, trust the stored value (lifetime entitlements)
   if (!ent.expiresDate) return ent.isActive;
 
-  const now = Date.now();
-  if (new Date(ent.expiresDate).getTime() > now) return true;
-  if (
-    ent.gracePeriodExpiresDate &&
-    new Date(ent.gracePeriodExpiresDate).getTime() > now
-  ) {
-    return true;
-  }
-  return false;
+  return new Date(ent.expiresDate).getTime() > Date.now();
 }
 
 // ============================================================================

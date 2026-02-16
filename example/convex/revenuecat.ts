@@ -34,26 +34,14 @@ function getAppUserId(identity: { subject: string }): string {
 const entitlementDataValidator = v.object({
   entitlementId: v.string(),
   isActive: v.boolean(),
-  productIdentifier: v.optional(v.string()),
   expiresDate: v.optional(v.string()),
-  gracePeriodExpiresDate: v.optional(v.string()),
-  purchaseDate: v.optional(v.string()),
-  originalPurchaseDate: v.optional(v.string()),
-  store: v.optional(v.string()),
-  isSandbox: v.optional(v.boolean()),
 });
 
 const entitlementDocValidator = v.object({
   appUserId: v.string(),
   entitlementId: v.string(),
   isActive: v.boolean(),
-  productIdentifier: v.optional(v.string()),
   expiresDate: v.optional(v.string()),
-  gracePeriodExpiresDate: v.optional(v.string()),
-  purchaseDate: v.optional(v.string()),
-  originalPurchaseDate: v.optional(v.string()),
-  store: v.optional(v.string()),
-  isSandbox: v.optional(v.boolean()),
   lastSyncedAt: v.number(),
 });
 
