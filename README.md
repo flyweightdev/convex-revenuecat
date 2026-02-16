@@ -1,6 +1,6 @@
 # @flyweightdev/convex-revenuecat
 
-A Convex component for syncing RevenueCat entitlements and virtual currency balances into your Convex database.
+A Convex component for syncing RevenueCat entitlements and virtual currency balances into your Convex database. Uses the [RevenueCat REST API v2](https://www.revenuecat.com/docs/api-v2) for all operations.
 
 Inspired by [@flyweightdev/convex-paddle](https://github.com/flyweightdev/convex-paddle).
 
@@ -8,7 +8,7 @@ This project was created with the help of Claude Code (Opus 4.6) and reviewed by
 
 ## Features
 
-- **Entitlement Sync** — Full resync from RevenueCat REST API on every webhook event
+- **Entitlement Sync** — Full resync from RevenueCat REST API v2 on every webhook event
 - **Virtual Currency** — Sync balances, spend currency via RevenueCat v2 API
 - **Cross-Platform** — Mobile in-app purchases + web Paddle checkout, unified via RevenueCat
 - **Reactive Queries** — Check entitlements and currency balances in real-time with Convex reactive queries
@@ -65,7 +65,7 @@ Add these to your [Convex Dashboard](https://dashboard.convex.dev) → Settings 
 | ----------------------------- | ----------------------------------------------------- |
 | `REVENUECAT_API_KEY`          | RevenueCat secret API key (`sk_...`)                  |
 | `REVENUECAT_WEBHOOK_AUTH_KEY` | Auth key configured in RevenueCat webhook settings    |
-| `REVENUECAT_PROJECT_ID`       | RevenueCat project ID (required for virtual currency) |
+| `REVENUECAT_PROJECT_ID`       | RevenueCat project ID (required for all v2 API calls) |
 
 ### 4. Configure RevenueCat Webhooks
 
@@ -199,10 +199,10 @@ const rcClient = new RevenueCatSync(components.revenuecat, {
 
 | Method                                                                             | Description                                                                         |
 | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `syncSubscriber(ctx, { appUserId })`                                               | Fetch subscriber from RevenueCat REST API (v1) and sync entitlements to Convex DB   |
-| `pollForEntitlement(ctx, { appUserId, entitlementId, maxAttempts?, intervalMs? })` | Poll until a specific entitlement becomes active                                    |
-| `syncVirtualCurrencyBalances(ctx, { appUserId })`                                  | Fetch virtual currency balances from RevenueCat REST API (v2) and sync to Convex DB |
-| `spendVirtualCurrency(ctx, { appUserId, adjustments, idempotencyKey? })`           | Spend virtual currency via RevenueCat v2 API and sync updated balances              |
+| `syncSubscriber(ctx, { appUserId })`                                               | Fetch customer from RevenueCat REST API v2 and sync entitlements to Convex DB |
+| `pollForEntitlement(ctx, { appUserId, entitlementId, maxAttempts?, intervalMs? })` | Poll until a specific entitlement becomes active                              |
+| `syncVirtualCurrencyBalances(ctx, { appUserId })`                                  | Fetch virtual currency balances from RevenueCat REST API v2 and sync to Convex DB |
+| `spendVirtualCurrency(ctx, { appUserId, adjustments, idempotencyKey? })`           | Spend virtual currency via RevenueCat v2 API and sync updated balances        |
 
 ### registerRoutes
 
@@ -213,7 +213,7 @@ registerRoutes(http, components.revenuecat, {
   webhookPath: "/revenuecat/webhook", // Optional, default
   REVENUECAT_WEBHOOK_AUTH_KEY: "...", // Optional, defaults to env var
   REVENUECAT_API_KEY: "...", // Optional, defaults to env var
-  REVENUECAT_PROJECT_ID: "...", // Optional, defaults to env var (for virtual currency)
+  REVENUECAT_PROJECT_ID: "...", // Optional, defaults to env var (required for all v2 API calls)
   events: {
     // Optional per-event handlers
     INITIAL_PURCHASE: async (ctx, event) => {},
@@ -286,23 +286,17 @@ The component creates these tables in its own namespace:
 | --------------- | ------ | ---------------------------------------- |
 | `appUserId`     | string | RevenueCat app_user_id                   |
 | `lastSyncedAt`  | number | Timestamp of last sync                   |
-| `rawSubscriber` | any    | Full raw subscriber JSON from RevenueCat |
+| `rawSubscriber` | any    | Full raw customer JSON from RevenueCat v2 API |
 
 ### entitlements
 
-| Field                    | Type     | Description                                        |
-| ------------------------ | -------- | -------------------------------------------------- |
-| `appUserId`              | string   | RevenueCat app_user_id                             |
-| `entitlementId`          | string   | Entitlement identifier (e.g., "premium")           |
-| `isActive`               | boolean  | Whether the entitlement is currently active        |
-| `productIdentifier`      | string?  | Associated product                                 |
-| `expiresDate`            | string?  | Expiration date (null = lifetime)                  |
-| `gracePeriodExpiresDate` | string?  | Grace period expiration                            |
-| `purchaseDate`           | string?  | When purchased                                     |
-| `originalPurchaseDate`   | string?  | Original purchase date                             |
-| `store`                  | string?  | Store origin (app_store, play_store, stripe, etc.) |
-| `isSandbox`              | boolean? | Whether from sandbox                               |
-| `lastSyncedAt`           | number   | Timestamp of last sync                             |
+| Field             | Type    | Description                                                          |
+| ----------------- | ------- | -------------------------------------------------------------------- |
+| `appUserId`       | string  | RevenueCat app_user_id                                               |
+| `entitlementId`   | string  | Entitlement lookup key (e.g., "premium"), resolved from v2 API       |
+| `isActive`        | boolean | Whether the entitlement is currently active                          |
+| `expiresDate`     | string? | Expiration date as ISO string (undefined = lifetime)                 |
+| `lastSyncedAt`    | number  | Timestamp of last sync                                               |
 
 ### virtual_currency_balances
 
@@ -376,7 +370,7 @@ Each poll iteration syncs the full subscriber state to Convex, so reactive queri
 
 ## Virtual Currency
 
-The component supports [RevenueCat Virtual Currency](https://www.revenuecat.com/docs/offerings/virtual-currency) via the v2 REST API. This requires `REVENUECAT_PROJECT_ID` to be set.
+The component supports [RevenueCat Virtual Currency](https://www.revenuecat.com/docs/offerings/virtual-currency) via the v2 REST API.
 
 ### Syncing balances
 
@@ -460,13 +454,13 @@ VITE_REVENUECAT_ENTITLEMENT_ID=premium
 ```bash
 REVENUECAT_API_KEY=sk_...                    # RevenueCat secret API key
 REVENUECAT_WEBHOOK_AUTH_KEY=whsec_...        # Auth key for RC webhook verification
-REVENUECAT_PROJECT_ID=proj_...               # RevenueCat project ID (for virtual currency)
+REVENUECAT_PROJECT_ID=proj_...               # RevenueCat project ID (required for all v2 API calls)
 PADDLE_API_KEY=pdl_sbox_...                  # Paddle API key (example app only)
 PADDLE_SANDBOX=true                          # Use Paddle sandbox (example app only)
 CLERK_JWT_ISSUER_DOMAIN=https://verb-noun-00.clerk.accounts.dev
 ```
 
-> **Note:** `PADDLE_API_KEY` and `PADDLE_SANDBOX` are only needed for the example app which uses `@flyweightdev/convex-paddle` for web checkout. Paddle webhooks go directly to RevenueCat — no `PADDLE_WEBHOOK_SECRET` is needed. The core component requires `REVENUECAT_API_KEY` and `REVENUECAT_WEBHOOK_AUTH_KEY`. Add `REVENUECAT_PROJECT_ID` if using virtual currency.
+> **Note:** `PADDLE_API_KEY` and `PADDLE_SANDBOX` are only needed for the example app which uses `@flyweightdev/convex-paddle` for web checkout. Paddle webhooks go directly to RevenueCat — no `PADDLE_WEBHOOK_SECRET` is needed. The core component requires `REVENUECAT_API_KEY`, `REVENUECAT_WEBHOOK_AUTH_KEY`, and `REVENUECAT_PROJECT_ID`.
 
 ## Troubleshooting
 

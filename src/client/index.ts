@@ -78,40 +78,26 @@ export class RevenueCatSync {
     ctx: ActionCtx,
     args: { appUserId: string },
   ): Promise<{ entitlements: EntitlementData[] }> {
-    const response = await fetch(
-      `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(args.appUserId)}`,
-      {
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
-        },
-      },
+    const result = await fetchCustomerAndEntitlements(
+      this.apiKey,
+      this.projectId,
+      args.appUserId,
     );
 
-    if (!response.ok) {
-      const errorBody = await response.text();
-      console.error("RevenueCat API error:", errorBody);
-      throw new Error(
-        `Failed to fetch subscriber ${args.appUserId} from RevenueCat`,
-      );
+    if (!result) {
+      await ctx.runMutation(this.component.private.clearEntitlements, {
+        appUserId: args.appUserId,
+      });
+      return { entitlements: [] };
     }
 
-    const result = await response.json();
-    const subscriber = result?.subscriber;
-
-    if (!subscriber || typeof subscriber !== "object") {
-      throw new Error(
-        `Unexpected RevenueCat API response for subscriber ${args.appUserId}: missing subscriber object`,
-      );
-    }
-
-    const entitlements = parseEntitlements(subscriber.entitlements);
+    const { customer, entitlements } = result;
     const lastSyncedAt = Date.now();
 
     await ctx.runMutation(this.component.private.syncSubscriberAndEntitlements, {
       appUserId: args.appUserId,
       lastSyncedAt,
-      rawSubscriber: subscriber,
+      rawSubscriber: customer,
       entitlements,
     });
 
@@ -255,45 +241,135 @@ export class RevenueCatSync {
 }
 
 // ============================================================================
-// ENTITLEMENT PARSING
+// CUSTOMER & ENTITLEMENT FETCHING (shared by syncSubscriber + fullResync)
 // ============================================================================
 
 /**
- * Parse entitlements from the RevenueCat subscriber object.
+ * Fetch a customer from the RevenueCat v2 API, resolve entitlement lookup keys,
+ * and handle pagination for active_entitlements.
+ *
+ * Returns `null` when the customer does not exist (404).
  */
-function parseEntitlements(
-  entitlementsMap: Record<string, any> | undefined,
-): EntitlementData[] {
-  const now = Date.now();
-  return Object.entries(entitlementsMap || {}).map(([key, value]) => {
-    const expiresDate: string | null = value.expires_date;
-    const gracePeriodExpiresDate: string | null =
-      value.grace_period_expires_date;
+async function fetchCustomerAndEntitlements(
+  apiKey: string,
+  projectId: string,
+  appUserId: string,
+  lookupMap?: Map<string, string>,
+): Promise<{ customer: any; entitlements: EntitlementData[] } | null> {
+  const response = await fetch(
+    `https://api.revenuecat.com/v2/projects/${encodeURIComponent(projectId)}/customers/${encodeURIComponent(appUserId)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+    },
+  );
 
-    let isActive = false;
-    if (!expiresDate) {
-      isActive = true; // lifetime
-    } else if (new Date(expiresDate).getTime() > now) {
-      isActive = true;
-    } else if (
-      gracePeriodExpiresDate &&
-      new Date(gracePeriodExpiresDate).getTime() > now
-    ) {
-      isActive = true;
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    console.error("RevenueCat API error:", errorBody);
+    throw new Error(`Failed to fetch customer ${appUserId} from RevenueCat`);
+  }
+
+  const customer = await response.json();
+
+  if (!customer || typeof customer !== "object" || customer.object !== "customer") {
+    throw new Error(
+      `Unexpected RevenueCat API response for customer ${appUserId}: missing customer object`,
+    );
+  }
+
+  const resolvedMap = lookupMap ?? await fetchEntitlementLookupMap(apiKey, projectId);
+
+  // Parse first page of active entitlements
+  const entitlements = parseActiveEntitlements(
+    customer.active_entitlements?.items,
+    resolvedMap,
+  );
+
+  // Follow pagination
+  let nextPage: string | null = customer.active_entitlements?.next_page ?? null;
+  while (nextPage) {
+    const pageResponse = await fetch(`https://api.revenuecat.com${nextPage}`, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!pageResponse.ok) break;
+    const page = await pageResponse.json();
+    entitlements.push(...parseActiveEntitlements(page.items, resolvedMap));
+    nextPage = page.next_page ?? null;
+  }
+
+  return { customer, entitlements };
+}
+
+/**
+ * Fetch project entitlement definitions and build an ID → lookup_key map.
+ *
+ * The v2 active_entitlements response uses opaque entitlement IDs (e.g.,
+ * "entla1b2c3d4e5"). This helper resolves them to the human-readable
+ * lookup keys (e.g., "premium") that consumers expect.
+ */
+async function fetchEntitlementLookupMap(
+  apiKey: string,
+  projectId: string,
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  let url: string | null =
+    `/v2/projects/${encodeURIComponent(projectId)}/entitlements?limit=200`;
+
+  while (url) {
+    const response: Response = await fetch(`https://api.revenuecat.com${url}`, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      console.error(
+        "Failed to fetch entitlement definitions:",
+        await response.text(),
+      );
+      break;
     }
 
-    return {
-      entitlementId: key,
-      productIdentifier: value.product_identifier || undefined,
-      isActive,
-      expiresDate: expiresDate || undefined,
-      gracePeriodExpiresDate: gracePeriodExpiresDate || undefined,
-      purchaseDate: value.purchase_date || undefined,
-      originalPurchaseDate: value.original_purchase_date || undefined,
-      store: value.store || undefined,
-      isSandbox: value.sandbox ?? undefined,
-    };
-  });
+    const result: any = await response.json();
+    for (const item of result.items ?? []) {
+      if (item.id && item.lookup_key) {
+        map.set(item.id, item.lookup_key);
+      }
+    }
+    url = result.next_page ?? null;
+  }
+
+  return map;
+}
+
+/**
+ * Parse active entitlements from the RevenueCat v2 API response,
+ * resolving opaque entitlement IDs to human-readable lookup keys.
+ */
+function parseActiveEntitlements(
+  items: any[] | undefined,
+  lookupMap: Map<string, string>,
+): EntitlementData[] {
+  if (!Array.isArray(items)) return [];
+
+  return items.map((item) => ({
+    entitlementId: lookupMap.get(item.entitlement_id) ?? item.entitlement_id,
+    isActive: true,
+    expiresDate: item.expires_at
+      ? new Date(item.expires_at).toISOString()
+      : undefined,
+  }));
 }
 
 // ============================================================================
@@ -573,6 +649,8 @@ async function processEvent(
 ): Promise<void> {
   const apiKey =
     config?.REVENUECAT_API_KEY || process.env.REVENUECAT_API_KEY;
+  const projectId =
+    config?.REVENUECAT_PROJECT_ID || process.env.REVENUECAT_PROJECT_ID;
   const appUserId = event.app_user_id;
 
   switch (event.type) {
@@ -589,10 +667,10 @@ async function processEvent(
     case "TEMPORARY_ENTITLEMENT_GRANT":
     case "REFUND":
     case "REFUND_REVERSED": {
-      if (!apiKey) {
+      if (!apiKey || !projectId) {
         throw new Error(
-          "REVENUECAT_API_KEY is required to process entitlement-affecting events. " +
-          "Set it in the Convex dashboard environment variables.",
+          "REVENUECAT_API_KEY and REVENUECAT_PROJECT_ID are required to process entitlement-affecting events. " +
+          "Set them in the Convex dashboard environment variables.",
         );
       }
       if (!appUserId) {
@@ -600,15 +678,15 @@ async function processEvent(
           `Webhook event ${event.type} (${event.id}) is missing app_user_id`,
         );
       }
-      await fullResync(ctx, component, apiKey, appUserId);
+      await fullResync(ctx, component, apiKey, projectId, appUserId);
       break;
     }
 
     case "TRANSFER": {
-      if (!apiKey) {
+      if (!apiKey || !projectId) {
         throw new Error(
-          "REVENUECAT_API_KEY is required to process TRANSFER events. " +
-          "Set it in the Convex dashboard environment variables.",
+          "REVENUECAT_API_KEY and REVENUECAT_PROJECT_ID are required to process TRANSFER events. " +
+          "Set them in the Convex dashboard environment variables.",
         );
       }
       const userIds = new Set<string>();
@@ -619,15 +697,15 @@ async function processEvent(
       for (const id of event.transferred_to ?? []) {
         if (id) userIds.add(id);
       }
+      // Pre-fetch lookup map once for all users in this transfer
+      const lookupMap = await fetchEntitlementLookupMap(apiKey, projectId);
       for (const id of userIds) {
-        await fullResync(ctx, component, apiKey, id);
+        await fullResync(ctx, component, apiKey, projectId, id, lookupMap);
       }
       break;
     }
 
     case "VIRTUAL_CURRENCY_TRANSACTION": {
-      const projectId =
-        config?.REVENUECAT_PROJECT_ID || process.env.REVENUECAT_PROJECT_ID;
       if (!apiKey || !projectId) {
         throw new Error(
           "REVENUECAT_API_KEY and REVENUECAT_PROJECT_ID are required to sync virtual currency. " +
@@ -668,52 +746,36 @@ async function processEvent(
 }
 
 /**
- * Full resync: fetch subscriber from RevenueCat API and update Convex DB.
+ * Full resync: fetch customer from RevenueCat v2 API and update Convex DB.
  */
 async function fullResync(
   ctx: ActionCtx,
   component: ComponentApi,
   apiKey: string,
+  projectId: string,
   appUserId: string,
+  lookupMap?: Map<string, string>,
 ): Promise<void> {
-  const response = await fetch(
-    `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(appUserId)}`,
-    {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-    },
+  const result = await fetchCustomerAndEntitlements(
+    apiKey,
+    projectId,
+    appUserId,
+    lookupMap,
   );
 
-  if (response.status === 404) {
-    console.warn(`Subscriber ${appUserId} not found in RevenueCat (404), clearing entitlements`);
+  if (!result) {
+    console.warn(`Customer ${appUserId} not found in RevenueCat (404), clearing entitlements`);
     await ctx.runMutation(component.private.clearEntitlements, { appUserId });
     return;
   }
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    console.error("RevenueCat API error:", errorBody);
-    throw new Error(`Failed to fetch subscriber ${appUserId} from RevenueCat`);
-  }
-
-  const result = await response.json();
-  const subscriber = result?.subscriber;
-
-  if (!subscriber || typeof subscriber !== "object") {
-    throw new Error(
-      `Unexpected RevenueCat API response for subscriber ${appUserId}: missing subscriber object`,
-    );
-  }
-
-  const entitlements = parseEntitlements(subscriber.entitlements);
+  const { customer, entitlements } = result;
   const lastSyncedAt = Date.now();
 
   await ctx.runMutation(component.private.syncSubscriberAndEntitlements, {
     appUserId,
     lastSyncedAt,
-    rawSubscriber: subscriber,
+    rawSubscriber: customer,
     entitlements,
   });
 }
