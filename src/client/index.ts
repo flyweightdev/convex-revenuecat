@@ -875,9 +875,9 @@ function sanitizeForConvex(value: unknown): unknown {
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
       if (val === null || val === undefined) continue;
       const safeKey = key.startsWith("$") ? `_${key.slice(1)}` : key;
-      if (safeKey !== key && safeKey in result) {
+      if (safeKey in result) {
         throw new Error(
-          `Convex sanitization: key collision — "${key}" maps to "${safeKey}" which already exists`,
+          `Convex sanitization: key collision — "${key}" would overwrite existing "${safeKey}"`,
         );
       }
       result[safeKey] = sanitizeForConvex(val);
