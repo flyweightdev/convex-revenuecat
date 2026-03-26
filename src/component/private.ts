@@ -18,7 +18,10 @@ const RATE_LIMIT_MAX_REQUESTS = 50;
 
 /**
  * Check whether a new API call is allowed under our rate limit.
- * If allowed, records the request. Returns true if the request can proceed.
+ * If allowed, records the request. Returns "allowed" if the request can proceed.
+ *
+ * Note: Convex mutations are serializable, so the check-then-insert pattern
+ * here is safe from race conditions — concurrent calls are executed sequentially.
  */
 export const checkRateLimit = mutation({
   args: {
