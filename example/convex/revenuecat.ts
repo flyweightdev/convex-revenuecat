@@ -1,58 +1,16 @@
 "use node";
 
-import { action, query } from "./_generated/server";
-import { components } from "./_generated/api";
+import { action } from "./_generated/server";
 import { RevenueCatSync } from "@flyweightdev/convex-revenuecat";
+import { components } from "./_generated/api";
 import { v } from "convex/values";
 import { requireAuth } from "./lib/auth";
+import { getAppUserId, entitlementDataValidator } from "./lib/revenuecat";
 
 const rcClient = new RevenueCatSync(components.revenuecat);
 
 // ============================================================================
-// USER ID MAPPING
-// ============================================================================
-
-/**
- * Map your auth identity to a RevenueCat app_user_id.
- *
- * Customize this for your auth provider:
- * - Clerk:   identity.subject
- * - Auth0:   identity.subject
- * - Custom:  identity.tokenIdentifier
- *
- * The returned value must match the app_user_id you use when configuring
- * RevenueCat in your mobile app and when creating Paddle checkouts.
- */
-function getAppUserId(identity: { subject: string }): string {
-  return identity.subject;
-}
-
-// ============================================================================
-// SHARED VALIDATORS
-// ============================================================================
-
-const entitlementDataValidator = v.object({
-  entitlementId: v.string(),
-  isActive: v.boolean(),
-  expiresDate: v.optional(v.string()),
-});
-
-const entitlementDocValidator = v.object({
-  appUserId: v.string(),
-  entitlementId: v.string(),
-  isActive: v.boolean(),
-  expiresDate: v.optional(v.string()),
-  lastSyncedAt: v.number(),
-});
-
-const subscriberDocValidator = v.object({
-  appUserId: v.string(),
-  lastSyncedAt: v.number(),
-  rawSubscriber: v.optional(v.any()),
-});
-
-// ============================================================================
-// ENTITLEMENT SYNC
+// ENTITLEMENT SYNC (actions — require Node.js runtime)
 // ============================================================================
 
 /**
@@ -95,80 +53,5 @@ export const waitForEntitlement = action({
       maxAttempts: args.maxAttempts,
       intervalMs: args.intervalMs,
     });
-  },
-});
-
-// ============================================================================
-// QUERIES
-// ============================================================================
-
-/**
- * Get active entitlements for the current user (reactive).
- */
-export const getMyEntitlements = query({
-  args: {},
-  returns: v.array(entitlementDocValidator),
-  handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-
-    return await ctx.runQuery(
-      components.revenuecat.public.getActiveEntitlements,
-      { appUserId: getAppUserId(identity) },
-    );
-  },
-});
-
-/**
- * Check if the current user has a specific active entitlement (reactive).
- */
-export const hasEntitlement = query({
-  args: { entitlementId: v.string() },
-  returns: v.boolean(),
-  handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return false;
-
-    return await ctx.runQuery(
-      components.revenuecat.public.hasActiveEntitlement,
-      {
-        appUserId: getAppUserId(identity),
-        entitlementId: args.entitlementId,
-      },
-    );
-  },
-});
-
-/**
- * Get all entitlements for the current user (active and inactive).
- */
-export const getAllEntitlements = query({
-  args: {},
-  returns: v.array(entitlementDocValidator),
-  handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-
-    return await ctx.runQuery(
-      components.revenuecat.public.getEntitlements,
-      { appUserId: getAppUserId(identity) },
-    );
-  },
-});
-
-/**
- * Get cached subscriber record for the current user.
- */
-export const getMySubscriber = query({
-  args: {},
-  returns: v.union(subscriberDocValidator, v.null()),
-  handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return null;
-
-    return await ctx.runQuery(
-      components.revenuecat.public.getSubscriber,
-      { appUserId: getAppUserId(identity) },
-    );
   },
 });

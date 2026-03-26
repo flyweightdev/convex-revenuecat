@@ -8,16 +8,20 @@
  * @module
  */
 
-import type { ApiFromModules, FilterApi, FunctionReference } from "convex/server";
-import { anyApi, componentsGeneric } from "convex/server";
-
 import type * as private_ from "../private.js";
 import type * as public_ from "../public.js";
 
-declare const fullApi: ApiFromModules<{
+import type {
+  ApiFromModules,
+  FilterApi,
+  FunctionReference,
+} from "convex/server";
+import { anyApi, componentsGeneric } from "convex/server";
+
+const fullApi: ApiFromModules<{
   private: typeof private_;
   public: typeof public_;
-}>;
+}> = anyApi as any;
 
 /**
  * A utility for referencing Convex functions in your app's public API.
@@ -45,4 +49,4 @@ export const internal: FilterApi<
   FunctionReference<any, "internal">
 > = anyApi as any;
 
-export const components = componentsGeneric();
+export const components = componentsGeneric() as unknown as {};

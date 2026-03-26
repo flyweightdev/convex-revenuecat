@@ -97,7 +97,7 @@ export class RevenueCatSync {
     await ctx.runMutation(this.component.private.syncSubscriberAndEntitlements, {
       appUserId: args.appUserId,
       lastSyncedAt,
-      rawSubscriber: customer,
+      rawSubscriber: sanitizeForConvex(customer),
       entitlements,
     });
 
@@ -255,8 +255,9 @@ async function fetchCustomerAndEntitlements(
   projectId: string,
   appUserId: string,
   lookupMap?: Map<string, string>,
+  rateLimit?: RevenueCatRequestRateLimit,
 ): Promise<{ customer: any; entitlements: EntitlementData[] } | null> {
-  const response = await fetch(
+  const response = await fetchRevenueCat(
     `https://api.revenuecat.com/v2/projects/${encodeURIComponent(projectId)}/customers/${encodeURIComponent(appUserId)}`,
     {
       headers: {
@@ -264,6 +265,7 @@ async function fetchCustomerAndEntitlements(
         "Content-Type": "application/json",
       },
     },
+    rateLimit,
   );
 
   if (response.status === 404) {
@@ -284,7 +286,8 @@ async function fetchCustomerAndEntitlements(
     );
   }
 
-  const resolvedMap = lookupMap ?? await fetchEntitlementLookupMap(apiKey, projectId);
+  const resolvedMap =
+    lookupMap ?? (await fetchEntitlementLookupMap(apiKey, projectId, rateLimit));
 
   // Parse first page of active entitlements
   const entitlements = parseActiveEntitlements(
@@ -295,12 +298,16 @@ async function fetchCustomerAndEntitlements(
   // Follow pagination
   let nextPage: string | null = customer.active_entitlements?.next_page ?? null;
   while (nextPage) {
-    const pageResponse = await fetch(`https://api.revenuecat.com${nextPage}`, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+    const pageResponse = await fetchRevenueCat(
+      `https://api.revenuecat.com${nextPage}`,
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
       },
-    });
+      rateLimit,
+    );
     if (!pageResponse.ok) break;
     const page = await pageResponse.json();
     entitlements.push(...parseActiveEntitlements(page.items, resolvedMap));
@@ -320,18 +327,23 @@ async function fetchCustomerAndEntitlements(
 async function fetchEntitlementLookupMap(
   apiKey: string,
   projectId: string,
+  rateLimit?: RevenueCatRequestRateLimit,
 ): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   let url: string | null =
     `/v2/projects/${encodeURIComponent(projectId)}/entitlements?limit=200`;
 
   while (url) {
-    const response: Response = await fetch(`https://api.revenuecat.com${url}`, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+    const response: Response = await fetchRevenueCat(
+      `https://api.revenuecat.com${url}`,
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
       },
-    });
+      rateLimit,
+    );
 
     if (!response.ok) {
       console.error(
@@ -383,8 +395,9 @@ async function fetchVirtualCurrencyBalances(
   apiKey: string,
   projectId: string,
   appUserId: string,
+  rateLimit?: RevenueCatRequestRateLimit,
 ): Promise<VirtualCurrencyBalanceData[]> {
-  const response = await fetch(
+  const response = await fetchRevenueCat(
     `https://api.revenuecat.com/v2/projects/${encodeURIComponent(projectId)}/customers/${encodeURIComponent(appUserId)}/virtual_currencies`,
     {
       headers: {
@@ -392,6 +405,7 @@ async function fetchVirtualCurrencyBalances(
         "Content-Type": "application/json",
       },
     },
+    rateLimit,
   );
 
   if (!response.ok) {
@@ -515,7 +529,7 @@ export function registerRoutes(
       }
 
       const authHeader = req.headers.get("authorization");
-      if (!authHeader || authHeader !== `Bearer ${webhookAuthKey}`) {
+      if (!authHeader || !constantTimeEqual(authHeader, `Bearer ${webhookAuthKey}`)) {
         console.error("Webhook authorization failed");
         return new Response("Unauthorized", { status: 401 });
       }
@@ -617,6 +631,18 @@ export function registerRoutes(
             unreserveError,
           );
         }
+        if (error instanceof RevenueCatRateLimitedError) {
+          return new Response(
+            JSON.stringify({ received: true, rate_limited: true }),
+            {
+              status: 429,
+              headers: {
+                "Content-Type": "application/json",
+                "Retry-After": "60",
+              },
+            },
+          );
+        }
         console.error("Error processing webhook:", error);
         return new Response("Error processing webhook", { status: 500 });
       }
@@ -652,6 +678,7 @@ async function processEvent(
   const projectId =
     config?.REVENUECAT_PROJECT_ID || process.env.REVENUECAT_PROJECT_ID;
   const appUserId = event.app_user_id;
+  const webhookRateLimit = getWebhookRateLimit(ctx, component, event);
 
   switch (event.type) {
     case "INITIAL_PURCHASE":
@@ -678,7 +705,15 @@ async function processEvent(
           `Webhook event ${event.type} (${event.id}) is missing app_user_id`,
         );
       }
-      await fullResync(ctx, component, apiKey, projectId, appUserId);
+      await fullResync(
+        ctx,
+        component,
+        apiKey,
+        projectId,
+        appUserId,
+        undefined,
+        webhookRateLimit,
+      );
       break;
     }
 
@@ -698,9 +733,21 @@ async function processEvent(
         if (id) userIds.add(id);
       }
       // Pre-fetch lookup map once for all users in this transfer
-      const lookupMap = await fetchEntitlementLookupMap(apiKey, projectId);
+      const lookupMap = await fetchEntitlementLookupMap(
+        apiKey,
+        projectId,
+        webhookRateLimit,
+      );
       for (const id of userIds) {
-        await fullResync(ctx, component, apiKey, projectId, id, lookupMap);
+        await fullResync(
+          ctx,
+          component,
+          apiKey,
+          projectId,
+          id,
+          lookupMap,
+          webhookRateLimit,
+        );
       }
       break;
     }
@@ -721,6 +768,7 @@ async function processEvent(
         apiKey,
         projectId,
         appUserId,
+        webhookRateLimit,
       );
       await ctx.runMutation(
         component.private.syncVirtualCurrencyBalances,
@@ -755,12 +803,14 @@ async function fullResync(
   projectId: string,
   appUserId: string,
   lookupMap?: Map<string, string>,
+  rateLimit?: RevenueCatRequestRateLimit,
 ): Promise<void> {
   const result = await fetchCustomerAndEntitlements(
     apiKey,
     projectId,
     appUserId,
     lookupMap,
+    rateLimit,
   );
 
   if (!result) {
@@ -775,9 +825,129 @@ async function fullResync(
   await ctx.runMutation(component.private.syncSubscriberAndEntitlements, {
     appUserId,
     lastSyncedAt,
-    rawSubscriber: customer,
+    rawSubscriber: sanitizeForConvex(customer),
     entitlements,
   });
+}
+
+type RevenueCatRequestRateLimit = {
+  component: ComponentApi;
+  ctx: ActionCtx;
+};
+
+class RevenueCatRateLimitedError extends Error {
+  constructor() {
+    super("RevenueCat API rate limit exceeded");
+    this.name = "RevenueCatRateLimitedError";
+  }
+}
+
+function getWebhookRateLimit(
+  ctx: ActionCtx,
+  component: ComponentApi,
+  event: RevenueCatWebhookEvent,
+): RevenueCatRequestRateLimit | undefined {
+  if (!webhookEventUsesRevenueCatApi(event)) {
+    return undefined;
+  }
+  return { ctx, component };
+}
+
+async function fetchRevenueCat(
+  input: string,
+  init: RequestInit,
+  rateLimit?: RevenueCatRequestRateLimit,
+): Promise<Response> {
+  if (rateLimit) {
+    const rateStatus = await rateLimit.ctx.runMutation(
+      rateLimit.component.private.checkRateLimit,
+      { key: "revenuecat_api" },
+    );
+    if (rateStatus === "rate_limited") {
+      throw new RevenueCatRateLimitedError();
+    }
+  }
+
+  return await fetch(input, init);
+}
+
+// ============================================================================
+// SECURITY HELPERS
+// ============================================================================
+
+/**
+ * Constant-time string comparison to prevent timing attacks.
+ * Always compares the full length regardless of where strings differ.
+ */
+function constantTimeEqual(a: string, b: string): boolean {
+  const len = Math.max(a.length, b.length);
+  let result = a.length ^ b.length;
+  for (let i = 0; i < len; i++) {
+    result |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  }
+  return result === 0;
+}
+
+/**
+ * Only some webhook types trigger outbound RevenueCat API calls.
+ * Skip rate-limit accounting for no-op event types.
+ */
+function webhookEventUsesRevenueCatApi(event: RevenueCatWebhookEvent): boolean {
+  switch (event.type) {
+    case "INITIAL_PURCHASE":
+    case "NON_RENEWING_PURCHASE":
+    case "RENEWAL":
+    case "PRODUCT_CHANGE":
+    case "CANCELLATION":
+    case "UNCANCELLATION":
+    case "BILLING_ISSUE":
+    case "SUBSCRIPTION_PAUSED":
+    case "SUBSCRIPTION_EXTENDED":
+    case "EXPIRATION":
+    case "TRANSFER":
+    case "TEMPORARY_ENTITLEMENT_GRANT":
+    case "REFUND":
+    case "REFUND_REVERSED":
+    case "VIRTUAL_CURRENCY_TRANSACTION":
+      return true;
+
+    case "TEST":
+    case "SUBSCRIBER_ALIAS":
+    case "INVOICE_ISSUANCE":
+    case "EXPERIMENT_ENROLLMENT":
+      return false;
+
+    default:
+      return false;
+  }
+}
+
+/**
+ * Sanitize a value for safe storage in Convex.
+ * - Preserves `null` values to keep the original payload shape intact
+ * - Escapes keys starting with `$` (reserved by Convex)
+ */
+function sanitizeForConvex(value: unknown): unknown {
+  if (value === null) return null;
+  if (value === undefined) return undefined;
+  if (Array.isArray(value)) {
+    return value.map(sanitizeForConvex);
+  }
+  if (typeof value === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      if (val === undefined) continue;
+      const safeKey = key.startsWith("$") ? `_${key.slice(1)}` : key;
+      if (Object.prototype.hasOwnProperty.call(result, safeKey)) {
+        throw new Error(
+          `Convex sanitization: key collision — "${key}" would overwrite existing "${safeKey}"`,
+        );
+      }
+      result[safeKey] = sanitizeForConvex(val);
+    }
+    return result;
+  }
+  return value;
 }
 
 export default RevenueCatSync;
