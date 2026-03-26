@@ -43,13 +43,6 @@ export type ComponentApi<
       "allowed" | "rate_limited",
       Name
     >;
-    cleanupOldWebhookEvents: FunctionReference<
-      "mutation",
-      "internal",
-      { maxAgeMs: number },
-      number,
-      Name
-    >;
     cleanupRateLimits: FunctionReference<
       "mutation",
       "internal",

@@ -318,38 +318,6 @@ export const syncVirtualCurrencyBalances = mutation({
 });
 
 /**
- * Delete processed webhook events older than the given age.
- * Designed to be called from a cron job in the consuming app.
- * Processes up to 500 records per invocation to avoid timeouts.
- */
-export const cleanupOldWebhookEvents = mutation({
-  args: {
-    maxAgeMs: v.number(),
-  },
-  returns: v.number(),
-  handler: async (ctx, args) => {
-    const cutoff = Date.now() - args.maxAgeMs;
-    const BATCH_SIZE = 500;
-
-    const oldEvents = await ctx.db
-      .query("webhook_events")
-      .filter((q) =>
-        q.and(
-          q.eq(q.field("status"), "processed"),
-          q.lt(q.field("processedAt"), cutoff),
-        ),
-      )
-      .take(BATCH_SIZE);
-
-    for (const event of oldEvents) {
-      await ctx.db.delete(event._id);
-    }
-
-    return oldEvents.length;
-  },
-});
-
-/**
  * Clear all entitlements for a user (e.g. when subscriber is deleted from RevenueCat).
  */
 export const clearEntitlements = mutation({
