@@ -8,16 +8,6 @@
  * @module
  */
 
-import {
-  actionGeneric,
-  httpActionGeneric,
-  queryGeneric,
-  mutationGeneric,
-  internalActionGeneric,
-  internalMutationGeneric,
-  internalQueryGeneric,
-} from "convex/server";
-
 import type {
   ActionBuilder,
   HttpActionBuilder,
@@ -29,7 +19,15 @@ import type {
   GenericDatabaseReader,
   GenericDatabaseWriter,
 } from "convex/server";
-
+import {
+  actionGeneric,
+  httpActionGeneric,
+  queryGeneric,
+  mutationGeneric,
+  internalActionGeneric,
+  internalMutationGeneric,
+  internalQueryGeneric,
+} from "convex/server";
 import type { DataModel } from "./dataModel.js";
 
 /**
@@ -114,6 +112,8 @@ export const httpAction: HttpActionBuilder = httpActionGeneric;
  *
  * The query context is passed as the first argument to any Convex query
  * function run on the server.
+ *
+ * If you're using code generation, use the `QueryCtx` type in `convex/_generated/server.d.ts` instead.
  */
 export type QueryCtx = GenericQueryCtx<DataModel>;
 
@@ -122,6 +122,8 @@ export type QueryCtx = GenericQueryCtx<DataModel>;
  *
  * The mutation context is passed as the first argument to any Convex mutation
  * function run on the server.
+ *
+ * If you're using code generation, use the `MutationCtx` type in `convex/_generated/server.d.ts` instead.
  */
 export type MutationCtx = GenericMutationCtx<DataModel>;
 
@@ -135,11 +137,20 @@ export type ActionCtx = GenericActionCtx<DataModel>;
 
 /**
  * An interface to read from the database within Convex query functions.
+ *
+ * The two entry points are {@link DatabaseReader.get}, which fetches a single
+ * document by its {@link Id}, or {@link DatabaseReader.query}, which starts
+ * building a query.
  */
 export type DatabaseReader = GenericDatabaseReader<DataModel>;
 
 /**
  * An interface to read from and write to the database within Convex mutation
  * functions.
+ *
+ * Convex guarantees that all writes within a single mutation are
+ * executed atomically, so you never have to worry about partial writes leaving
+ * your data in an inconsistent state. See [the Convex Guide](https://docs.convex.dev/understanding/convex-fundamentals/functions#atomicity-and-optimistic-concurrency-control)
+ * for the guarantees Convex provides your functions.
  */
 export type DatabaseWriter = GenericDatabaseWriter<DataModel>;
