@@ -1,5 +1,5 @@
 import { cronJobs } from "convex/server";
-import { components } from "./_generated/api.js";
+import { components, internal } from "./_generated/api.js";
 import { internalMutation } from "./_generated/server.js";
 
 const crons = cronJobs();

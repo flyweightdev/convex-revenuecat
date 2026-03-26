@@ -816,17 +816,10 @@ async function fullResync(
  * Always compares the full length regardless of where strings differ.
  */
 function constantTimeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    // Still do a dummy comparison to avoid leaking length info via timing
-    let result = 1;
-    for (let i = 0; i < a.length; i++) {
-      result |= a.charCodeAt(i) ^ a.charCodeAt(i);
-    }
-    return false;
-  }
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  const len = Math.max(a.length, b.length);
+  let result = a.length ^ b.length;
+  for (let i = 0; i < len; i++) {
+    result |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
   }
   return result === 0;
 }
@@ -846,6 +839,9 @@ function sanitizeForConvex(value: unknown): unknown {
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
       if (val === null || val === undefined) continue;
       const safeKey = key.startsWith("$") ? `_${key.slice(1)}` : key;
+      if (safeKey in result) {
+        console.warn(`Convex sanitization: key collision ${key} → ${safeKey}`);
+      }
       result[safeKey] = sanitizeForConvex(val);
     }
     return result;
