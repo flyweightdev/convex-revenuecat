@@ -28,6 +28,13 @@ export default defineSchema({
     .index("by_app_user_id", ["appUserId"])
     .index("by_app_user_id_and_currency", ["appUserId", "currencyCode"]),
 
+  rate_limits: defineTable({
+    key: v.string(),
+    timestamp: v.number(),
+  })
+    .index("by_key_and_timestamp", ["key", "timestamp"])
+    .index("by_timestamp", ["timestamp"]),
+
   webhook_events: defineTable({
     revenuecatEventId: v.string(),
     eventType: v.string(),

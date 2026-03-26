@@ -2,6 +2,77 @@ import { v } from "convex/values";
 import { mutation } from "./_generated/server.js";
 
 // ============================================================================
+// RATE LIMITING
+// ============================================================================
+
+/**
+ * RevenueCat API v2 rate limits (per minute):
+ * - Customer Information: 480 req/min
+ * - Project Configuration (entitlements list): 60 req/min
+ *
+ * Our full resync hits both domains, so we cap webhook-triggered API calls
+ * at 50/min to stay well below the tightest limit (60 for project config).
+ */
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 50;
+
+/**
+ * Check whether a new API call is allowed under our rate limit.
+ * If allowed, records the request. Returns true if the request can proceed.
+ */
+export const checkRateLimit = mutation({
+  args: {
+    key: v.string(),
+  },
+  returns: v.union(v.literal("allowed"), v.literal("rate_limited")),
+  handler: async (ctx, args) => {
+    const windowStart = Date.now() - RATE_LIMIT_WINDOW_MS;
+
+    const recentRequests = await ctx.db
+      .query("rate_limits")
+      .withIndex("by_key_and_timestamp", (q) =>
+        q.eq("key", args.key).gt("timestamp", windowStart),
+      )
+      .collect();
+
+    if (recentRequests.length >= RATE_LIMIT_MAX_REQUESTS) {
+      return "rate_limited";
+    }
+
+    await ctx.db.insert("rate_limits", {
+      key: args.key,
+      timestamp: Date.now(),
+    });
+
+    return "allowed";
+  },
+});
+
+/**
+ * Clean up expired rate limit entries.
+ * Designed to be called from a cron job in the consuming app.
+ */
+export const cleanupRateLimits = mutation({
+  args: {},
+  returns: v.number(),
+  handler: async (ctx) => {
+    const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
+    const BATCH_SIZE = 500;
+
+    const expired = await ctx.db
+      .query("rate_limits")
+      .withIndex("by_timestamp", (q) => q.lt("timestamp", cutoff))
+      .take(BATCH_SIZE);
+
+    for (const entry of expired) {
+      await ctx.db.delete(entry._id);
+    }
+
+    return expired.length;
+  },
+});
+
+// ============================================================================
 // WEBHOOK EVENT IDEMPOTENCY
 // (Same state machine as convex-paddle, adapted for RevenueCat field names)
 // ============================================================================
@@ -243,6 +314,38 @@ export const syncVirtualCurrencyBalances = mutation({
     }
 
     return null;
+  },
+});
+
+/**
+ * Delete processed webhook events older than the given age.
+ * Designed to be called from a cron job in the consuming app.
+ * Processes up to 500 records per invocation to avoid timeouts.
+ */
+export const cleanupOldWebhookEvents = mutation({
+  args: {
+    maxAgeMs: v.number(),
+  },
+  returns: v.number(),
+  handler: async (ctx, args) => {
+    const cutoff = Date.now() - args.maxAgeMs;
+    const BATCH_SIZE = 500;
+
+    const oldEvents = await ctx.db
+      .query("webhook_events")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("status"), "processed"),
+          q.lt(q.field("processedAt"), cutoff),
+        ),
+      )
+      .take(BATCH_SIZE);
+
+    for (const event of oldEvents) {
+      await ctx.db.delete(event._id);
+    }
+
+    return oldEvents.length;
   },
 });
 

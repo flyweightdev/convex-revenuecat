@@ -97,7 +97,7 @@ export class RevenueCatSync {
     await ctx.runMutation(this.component.private.syncSubscriberAndEntitlements, {
       appUserId: args.appUserId,
       lastSyncedAt,
-      rawSubscriber: customer,
+      rawSubscriber: sanitizeForConvex(customer),
       entitlements,
     });
 
@@ -515,7 +515,7 @@ export function registerRoutes(
       }
 
       const authHeader = req.headers.get("authorization");
-      if (!authHeader || authHeader !== `Bearer ${webhookAuthKey}`) {
+      if (!authHeader || !constantTimeEqual(authHeader, `Bearer ${webhookAuthKey}`)) {
         console.error("Webhook authorization failed");
         return new Response("Unauthorized", { status: 401 });
       }
@@ -580,7 +580,34 @@ export function registerRoutes(
         return new Response("Idempotency check failed", { status: 500 });
       }
 
-      // 5. Process the event
+      // 5. Rate limit check — cap outbound RevenueCat API calls
+      try {
+        const rateStatus = await ctx.runMutation(
+          component.private.checkRateLimit,
+          { key: "revenuecat_api" },
+        );
+        if (rateStatus === "rate_limited") {
+          // Release the idempotency lock so the event can be retried
+          await ctx.runMutation(component.private.unreserveEvent, {
+            revenuecatEventId: event.id,
+          });
+          return new Response(
+            JSON.stringify({ received: true, rate_limited: true }),
+            {
+              status: 429,
+              headers: {
+                "Content-Type": "application/json",
+                "Retry-After": "60",
+              },
+            },
+          );
+        }
+      } catch (error) {
+        console.error("Rate limit check failed:", error);
+        // Continue processing — better to risk an API call than drop an event
+      }
+
+      // 6. Process the event
       try {
         await processEvent(ctx, component, event, config);
 
@@ -596,7 +623,7 @@ export function registerRoutes(
           await customHandler(ctx, event);
         }
 
-        // 6. Mark as processed
+        // 7. Mark as processed
         try {
           await ctx.runMutation(component.private.markEventProcessed, {
             revenuecatEventId: event.id,
@@ -775,9 +802,55 @@ async function fullResync(
   await ctx.runMutation(component.private.syncSubscriberAndEntitlements, {
     appUserId,
     lastSyncedAt,
-    rawSubscriber: customer,
+    rawSubscriber: sanitizeForConvex(customer),
     entitlements,
   });
+}
+
+// ============================================================================
+// SECURITY HELPERS
+// ============================================================================
+
+/**
+ * Constant-time string comparison to prevent timing attacks.
+ * Always compares the full length regardless of where strings differ.
+ */
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) {
+    // Still do a dummy comparison to avoid leaking length info via timing
+    let result = 1;
+    for (let i = 0; i < a.length; i++) {
+      result |= a.charCodeAt(i) ^ a.charCodeAt(i);
+    }
+    return false;
+  }
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
+/**
+ * Sanitize a value for safe storage in Convex.
+ * - Removes `null` values (Convex doesn't support null in objects)
+ * - Escapes keys starting with `$` (reserved by Convex)
+ */
+function sanitizeForConvex(value: unknown): unknown {
+  if (value === null || value === undefined) return undefined;
+  if (Array.isArray(value)) {
+    return value.filter((v) => v !== null).map(sanitizeForConvex);
+  }
+  if (typeof value === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      if (val === null || val === undefined) continue;
+      const safeKey = key.startsWith("$") ? `_${key.slice(1)}` : key;
+      result[safeKey] = sanitizeForConvex(val);
+    }
+    return result;
+  }
+  return value;
 }
 
 export default RevenueCatSync;

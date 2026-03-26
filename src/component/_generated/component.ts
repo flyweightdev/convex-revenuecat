@@ -36,6 +36,27 @@ export type ComponentApi<
       "acquired" | "processing" | "processed",
       Name
     >;
+    checkRateLimit: FunctionReference<
+      "mutation",
+      "internal",
+      { key: string },
+      "allowed" | "rate_limited",
+      Name
+    >;
+    cleanupOldWebhookEvents: FunctionReference<
+      "mutation",
+      "internal",
+      { maxAgeMs: number },
+      number,
+      Name
+    >;
+    cleanupRateLimits: FunctionReference<
+      "mutation",
+      "internal",
+      {},
+      number,
+      Name
+    >;
     clearEntitlements: FunctionReference<
       "mutation",
       "internal",
