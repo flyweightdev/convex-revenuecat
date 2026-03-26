@@ -862,18 +862,19 @@ function webhookEventUsesRevenueCatApi(event: RevenueCatWebhookEvent): boolean {
 
 /**
  * Sanitize a value for safe storage in Convex.
- * - Removes `null` values (Convex doesn't support null in objects)
+ * - Preserves `null` values to keep the original payload shape intact
  * - Escapes keys starting with `$` (reserved by Convex)
  */
 function sanitizeForConvex(value: unknown): unknown {
-  if (value === null || value === undefined) return undefined;
+  if (value === null) return null;
+  if (value === undefined) return undefined;
   if (Array.isArray(value)) {
-    return value.filter((v) => v !== null).map(sanitizeForConvex);
+    return value.map(sanitizeForConvex);
   }
   if (typeof value === "object") {
     const result: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-      if (val === null || val === undefined) continue;
+      if (val === undefined) continue;
       const safeKey = key.startsWith("$") ? `_${key.slice(1)}` : key;
       if (safeKey in result) {
         throw new Error(
