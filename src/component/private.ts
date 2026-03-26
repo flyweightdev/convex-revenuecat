@@ -58,17 +58,30 @@ export const cleanupRateLimits = mutation({
   handler: async (ctx) => {
     const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
     const BATCH_SIZE = 500;
+    let deleted = 0;
 
-    const expired = await ctx.db
-      .query("rate_limits")
-      .withIndex("by_timestamp", (q) => q.lt("timestamp", cutoff))
-      .take(BATCH_SIZE);
+    while (true) {
+      const expired = await ctx.db
+        .query("rate_limits")
+        .withIndex("by_timestamp", (q) => q.lt("timestamp", cutoff))
+        .take(BATCH_SIZE);
 
-    for (const entry of expired) {
-      await ctx.db.delete(entry._id);
+      if (expired.length === 0) {
+        break;
+      }
+
+      for (const entry of expired) {
+        await ctx.db.delete(entry._id);
+      }
+
+      deleted += expired.length;
+
+      if (expired.length < BATCH_SIZE) {
+        break;
+      }
     }
 
-    return expired.length;
+    return deleted;
   },
 });
 

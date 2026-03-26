@@ -6,7 +6,7 @@ const crons = cronJobs();
 
 crons.interval(
   "Clean up expired RevenueCat rate limits",
-  { hours: 1 },
+  { minutes: 5 },
   internal.crons.cleanupRateLimits,
 );
 

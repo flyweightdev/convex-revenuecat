@@ -581,30 +581,32 @@ export function registerRoutes(
       }
 
       // 5. Rate limit check — cap outbound RevenueCat API calls
-      try {
-        const rateStatus = await ctx.runMutation(
-          component.private.checkRateLimit,
-          { key: "revenuecat_api" },
-        );
-        if (rateStatus === "rate_limited") {
-          // Release the idempotency lock so the event can be retried
-          await ctx.runMutation(component.private.unreserveEvent, {
-            revenuecatEventId: event.id,
-          });
-          return new Response(
-            JSON.stringify({ received: true, rate_limited: true }),
-            {
-              status: 429,
-              headers: {
-                "Content-Type": "application/json",
-                "Retry-After": "60",
-              },
-            },
+      if (webhookEventUsesRevenueCatApi(event)) {
+        try {
+          const rateStatus = await ctx.runMutation(
+            component.private.checkRateLimit,
+            { key: "revenuecat_api" },
           );
+          if (rateStatus === "rate_limited") {
+            // Release the idempotency lock so the event can be retried
+            await ctx.runMutation(component.private.unreserveEvent, {
+              revenuecatEventId: event.id,
+            });
+            return new Response(
+              JSON.stringify({ received: true, rate_limited: true }),
+              {
+                status: 429,
+                headers: {
+                  "Content-Type": "application/json",
+                  "Retry-After": "60",
+                },
+              },
+            );
+          }
+        } catch (error) {
+          console.error("Rate limit check failed:", error);
+          // Continue processing — better to risk an API call than drop an event
         }
-      } catch (error) {
-        console.error("Rate limit check failed:", error);
-        // Continue processing — better to risk an API call than drop an event
       }
 
       // 6. Process the event
@@ -822,6 +824,40 @@ function constantTimeEqual(a: string, b: string): boolean {
     result |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
   }
   return result === 0;
+}
+
+/**
+ * Only some webhook types trigger outbound RevenueCat API calls.
+ * Skip rate-limit accounting for no-op event types.
+ */
+function webhookEventUsesRevenueCatApi(event: RevenueCatWebhookEvent): boolean {
+  switch (event.type) {
+    case "INITIAL_PURCHASE":
+    case "NON_RENEWING_PURCHASE":
+    case "RENEWAL":
+    case "PRODUCT_CHANGE":
+    case "CANCELLATION":
+    case "UNCANCELLATION":
+    case "BILLING_ISSUE":
+    case "SUBSCRIPTION_PAUSED":
+    case "SUBSCRIPTION_EXTENDED":
+    case "EXPIRATION":
+    case "TRANSFER":
+    case "TEMPORARY_ENTITLEMENT_GRANT":
+    case "REFUND":
+    case "REFUND_REVERSED":
+    case "VIRTUAL_CURRENCY_TRANSACTION":
+      return true;
+
+    case "TEST":
+    case "SUBSCRIBER_ALIAS":
+    case "INVOICE_ISSUANCE":
+    case "EXPERIMENT_ENROLLMENT":
+      return false;
+
+    default:
+      return false;
+  }
 }
 
 /**
