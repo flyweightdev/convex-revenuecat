@@ -36,7 +36,7 @@ export function StorePage() {
   // Check the specific subscription entitlement reactively via RevenueCat
   const ENTITLEMENT_ID =
     import.meta.env.VITE_REVENUECAT_ENTITLEMENT_ID || "premium";
-  const hasActiveEntitlement = useQuery(api.revenuecat.hasEntitlement, {
+  const hasActiveEntitlement = useQuery(api.revenuecatQueries.hasEntitlement, {
     entitlementId: ENTITLEMENT_ID,
   });
 

@@ -15,8 +15,8 @@ import { StatusBadge } from "@/components/status-badge";
 import { RefreshCw, Shield, Inbox, Loader2 } from "lucide-react";
 
 export function ProfilePage() {
-  const entitlements = useQuery(api.revenuecat.getAllEntitlements);
-  const subscriber = useQuery(api.revenuecat.getMySubscriber);
+  const entitlements = useQuery(api.revenuecatQueries.getAllEntitlements);
+  const subscriber = useQuery(api.revenuecatQueries.getMySubscriber);
   const syncEntitlements = useAction(api.revenuecat.syncEntitlements);
 
   const [syncing, setSyncing] = useState(false);

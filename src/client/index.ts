@@ -255,8 +255,9 @@ async function fetchCustomerAndEntitlements(
   projectId: string,
   appUserId: string,
   lookupMap?: Map<string, string>,
+  rateLimit?: RevenueCatRequestRateLimit,
 ): Promise<{ customer: any; entitlements: EntitlementData[] } | null> {
-  const response = await fetch(
+  const response = await fetchRevenueCat(
     `https://api.revenuecat.com/v2/projects/${encodeURIComponent(projectId)}/customers/${encodeURIComponent(appUserId)}`,
     {
       headers: {
@@ -264,6 +265,7 @@ async function fetchCustomerAndEntitlements(
         "Content-Type": "application/json",
       },
     },
+    rateLimit,
   );
 
   if (response.status === 404) {
@@ -284,7 +286,8 @@ async function fetchCustomerAndEntitlements(
     );
   }
 
-  const resolvedMap = lookupMap ?? await fetchEntitlementLookupMap(apiKey, projectId);
+  const resolvedMap =
+    lookupMap ?? (await fetchEntitlementLookupMap(apiKey, projectId, rateLimit));
 
   // Parse first page of active entitlements
   const entitlements = parseActiveEntitlements(
@@ -295,12 +298,16 @@ async function fetchCustomerAndEntitlements(
   // Follow pagination
   let nextPage: string | null = customer.active_entitlements?.next_page ?? null;
   while (nextPage) {
-    const pageResponse = await fetch(`https://api.revenuecat.com${nextPage}`, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+    const pageResponse = await fetchRevenueCat(
+      `https://api.revenuecat.com${nextPage}`,
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
       },
-    });
+      rateLimit,
+    );
     if (!pageResponse.ok) break;
     const page = await pageResponse.json();
     entitlements.push(...parseActiveEntitlements(page.items, resolvedMap));
@@ -320,18 +327,23 @@ async function fetchCustomerAndEntitlements(
 async function fetchEntitlementLookupMap(
   apiKey: string,
   projectId: string,
+  rateLimit?: RevenueCatRequestRateLimit,
 ): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   let url: string | null =
     `/v2/projects/${encodeURIComponent(projectId)}/entitlements?limit=200`;
 
   while (url) {
-    const response: Response = await fetch(`https://api.revenuecat.com${url}`, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+    const response: Response = await fetchRevenueCat(
+      `https://api.revenuecat.com${url}`,
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
       },
-    });
+      rateLimit,
+    );
 
     if (!response.ok) {
       console.error(
@@ -383,8 +395,9 @@ async function fetchVirtualCurrencyBalances(
   apiKey: string,
   projectId: string,
   appUserId: string,
+  rateLimit?: RevenueCatRequestRateLimit,
 ): Promise<VirtualCurrencyBalanceData[]> {
-  const response = await fetch(
+  const response = await fetchRevenueCat(
     `https://api.revenuecat.com/v2/projects/${encodeURIComponent(projectId)}/customers/${encodeURIComponent(appUserId)}/virtual_currencies`,
     {
       headers: {
@@ -392,6 +405,7 @@ async function fetchVirtualCurrencyBalances(
         "Content-Type": "application/json",
       },
     },
+    rateLimit,
   );
 
   if (!response.ok) {
@@ -580,36 +594,7 @@ export function registerRoutes(
         return new Response("Idempotency check failed", { status: 500 });
       }
 
-      // 5. Rate limit check — cap outbound RevenueCat API calls
-      if (webhookEventUsesRevenueCatApi(event)) {
-        try {
-          const rateStatus = await ctx.runMutation(
-            component.private.checkRateLimit,
-            { key: "revenuecat_api" },
-          );
-          if (rateStatus === "rate_limited") {
-            // Release the idempotency lock so the event can be retried
-            await ctx.runMutation(component.private.unreserveEvent, {
-              revenuecatEventId: event.id,
-            });
-            return new Response(
-              JSON.stringify({ received: true, rate_limited: true }),
-              {
-                status: 429,
-                headers: {
-                  "Content-Type": "application/json",
-                  "Retry-After": "60",
-                },
-              },
-            );
-          }
-        } catch (error) {
-          console.error("Rate limit check failed:", error);
-          // Continue processing — better to risk an API call than drop an event
-        }
-      }
-
-      // 6. Process the event
+      // 5. Process the event
       try {
         await processEvent(ctx, component, event, config);
 
@@ -625,7 +610,7 @@ export function registerRoutes(
           await customHandler(ctx, event);
         }
 
-        // 7. Mark as processed
+        // 6. Mark as processed
         try {
           await ctx.runMutation(component.private.markEventProcessed, {
             revenuecatEventId: event.id,
@@ -644,6 +629,18 @@ export function registerRoutes(
           console.error(
             "Failed to release lock after processing failure:",
             unreserveError,
+          );
+        }
+        if (error instanceof RevenueCatRateLimitedError) {
+          return new Response(
+            JSON.stringify({ received: true, rate_limited: true }),
+            {
+              status: 429,
+              headers: {
+                "Content-Type": "application/json",
+                "Retry-After": "60",
+              },
+            },
           );
         }
         console.error("Error processing webhook:", error);
@@ -681,6 +678,7 @@ async function processEvent(
   const projectId =
     config?.REVENUECAT_PROJECT_ID || process.env.REVENUECAT_PROJECT_ID;
   const appUserId = event.app_user_id;
+  const webhookRateLimit = getWebhookRateLimit(ctx, component, event);
 
   switch (event.type) {
     case "INITIAL_PURCHASE":
@@ -707,7 +705,15 @@ async function processEvent(
           `Webhook event ${event.type} (${event.id}) is missing app_user_id`,
         );
       }
-      await fullResync(ctx, component, apiKey, projectId, appUserId);
+      await fullResync(
+        ctx,
+        component,
+        apiKey,
+        projectId,
+        appUserId,
+        undefined,
+        webhookRateLimit,
+      );
       break;
     }
 
@@ -727,9 +733,21 @@ async function processEvent(
         if (id) userIds.add(id);
       }
       // Pre-fetch lookup map once for all users in this transfer
-      const lookupMap = await fetchEntitlementLookupMap(apiKey, projectId);
+      const lookupMap = await fetchEntitlementLookupMap(
+        apiKey,
+        projectId,
+        webhookRateLimit,
+      );
       for (const id of userIds) {
-        await fullResync(ctx, component, apiKey, projectId, id, lookupMap);
+        await fullResync(
+          ctx,
+          component,
+          apiKey,
+          projectId,
+          id,
+          lookupMap,
+          webhookRateLimit,
+        );
       }
       break;
     }
@@ -750,6 +768,7 @@ async function processEvent(
         apiKey,
         projectId,
         appUserId,
+        webhookRateLimit,
       );
       await ctx.runMutation(
         component.private.syncVirtualCurrencyBalances,
@@ -784,12 +803,14 @@ async function fullResync(
   projectId: string,
   appUserId: string,
   lookupMap?: Map<string, string>,
+  rateLimit?: RevenueCatRequestRateLimit,
 ): Promise<void> {
   const result = await fetchCustomerAndEntitlements(
     apiKey,
     projectId,
     appUserId,
     lookupMap,
+    rateLimit,
   );
 
   if (!result) {
@@ -807,6 +828,47 @@ async function fullResync(
     rawSubscriber: sanitizeForConvex(customer),
     entitlements,
   });
+}
+
+type RevenueCatRequestRateLimit = {
+  component: ComponentApi;
+  ctx: ActionCtx;
+};
+
+class RevenueCatRateLimitedError extends Error {
+  constructor() {
+    super("RevenueCat API rate limit exceeded");
+    this.name = "RevenueCatRateLimitedError";
+  }
+}
+
+function getWebhookRateLimit(
+  ctx: ActionCtx,
+  component: ComponentApi,
+  event: RevenueCatWebhookEvent,
+): RevenueCatRequestRateLimit | undefined {
+  if (!webhookEventUsesRevenueCatApi(event)) {
+    return undefined;
+  }
+  return { ctx, component };
+}
+
+async function fetchRevenueCat(
+  input: string,
+  init: RequestInit,
+  rateLimit?: RevenueCatRequestRateLimit,
+): Promise<Response> {
+  if (rateLimit) {
+    const rateStatus = await rateLimit.ctx.runMutation(
+      rateLimit.component.private.checkRateLimit,
+      { key: "revenuecat_api" },
+    );
+    if (rateStatus === "rate_limited") {
+      throw new RevenueCatRateLimitedError();
+    }
+  }
+
+  return await fetch(input, init);
 }
 
 // ============================================================================
