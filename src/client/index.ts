@@ -938,7 +938,7 @@ function sanitizeForConvex(value: unknown): unknown {
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
       if (val === undefined) continue;
       const safeKey = key.startsWith("$") ? `_${key.slice(1)}` : key;
-      if (safeKey in result) {
+      if (Object.prototype.hasOwnProperty.call(result, safeKey)) {
         throw new Error(
           `Convex sanitization: key collision — "${key}" would overwrite existing "${safeKey}"`,
         );
